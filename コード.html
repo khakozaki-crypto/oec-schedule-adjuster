@@ -499,6 +499,8 @@
         const appId = 'oec-schedule-system';
         
         let app, auth, db;
+        let firebaseReady = false;
+
         try {
             app = firebase.initializeApp(firebaseConfig);
             auth = firebase.auth();
@@ -526,17 +528,21 @@
                     await auth.signInAnonymously();
                 } catch (e) {
                     console.error("Firebase Auth Error: ", e);
-                    showToast("認証エラーが発生しました", "alert-circle");
+                    showToast("認証に失敗。ローカルモードで動作します", "alert-circle");
                 }
 
                 auth.onAuthStateChanged((currentUser) => {
                     user = currentUser;
                     if (user) {
+                        firebaseReady = true;
                         startFirestoreListeners();
                     } else {
-                        showToast("接続が切断されました", "alert-circle");
+                        firebaseReady = false;
+                        showToast("Firebase未接続: ローカル保存を使用", "info");
                     }
                 });
+            } else {
+                showToast("Firebase未初期化: ローカル保存を使用", "info");
             }
 
             const urlParams = new URLSearchParams(window.location.search);
@@ -574,16 +580,9 @@
             if (copyArea) {
                 copyArea.addEventListener('click', function() {
                     this.select();
-                    showToast('テキストを選択しました。コピー（Ctrl+C）してください。', 'info');
+                    showToast('テキストを選択しました。コピーしてください。', 'info');
                 });
             }
-            document.getElementById('btn-copy-response')?.addEventListener('click', () => {
-                const textarea = document.getElementById('copy-text-area');
-                if (textarea) {
-                    textarea.select();
-                    showToast('テキストを選択しました。コピー（Ctrl+C）してください。', 'info');
-                }
-            });
         }
 
         function startFirestoreListeners() {
@@ -598,10 +597,11 @@
                     events.push({ id: doc.id, ...doc.data() });
                 });
                 events.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+                saveToLocalStorage();
                 refreshAllViews();
             }, (error) => {
-                console.error("Error loading events:", error);
-                showToast("データ読み込みエラー", "alert-circle");
+                console.error("Error loading events from Firebase:", error);
+                firebaseReady = false; 
             });
 
             bookingsRef.onSnapshot((snapshot) => {
@@ -609,36 +609,34 @@
                 snapshot.forEach(doc => {
                     bookings.push({ id: doc.id, ...doc.data() });
                 });
+                saveToLocalStorage();
                 refreshAllViews();
             }, (error) => {
-                console.error("Error loading bookings:", error);
+                console.error("Error loading bookings from Firebase:", error);
+                firebaseReady = false;
             });
         }
 
         function loadFromLocalStorage() {
             try {
                 const savedEvents = localStorage.getItem('oec_scheduler_events');
-                if (savedEvents) {
-                    events = JSON.parse(savedEvents);
-                }
-            } catch (e) {
-                console.error("Failed to parse events", e);
-            }
-            if (!events || !Array.isArray(events)) {
-                events = [];
-            }
-
-            try {
+                if (savedEvents) events = JSON.parse(savedEvents);
                 const savedBookings = localStorage.getItem('oec_scheduler_bookings');
-                if (savedBookings) {
-                    bookings = JSON.parse(savedBookings);
-                }
+                if (savedBookings) bookings = JSON.parse(savedBookings);
             } catch (e) {
-                console.error("Failed to parse bookings", e);
+                console.error("Failed to parse LocalStorage data", e);
             }
-            if (!bookings || !Array.isArray(bookings)) {
-                bookings = [];
-            }
+            if (!events || !Array.isArray(events)) events = [];
+            if (!bookings || !Array.isArray(bookings)) bookings = [];
+        }
+
+        function saveToLocalStorage() {
+            localStorage.setItem('oec_scheduler_events', JSON.stringify(events || []));
+            localStorage.setItem('oec_scheduler_bookings', JSON.stringify(bookings || []));
+        }
+
+        function getAlphabetName(index) {
+            return String.fromCharCode(65 + (index % 26)) + "様";
         }
 
         function showCustomConfirm(title, message, isDangerous = true) {
@@ -669,26 +667,14 @@
                     }
                 }
                 lucide.createIcons();
-
                 modal.classList.remove('hidden');
 
-                const handleCancel = () => {
-                    modal.classList.add('hidden');
-                    cleanup();
-                    resolve(false);
-                };
-
-                const handleOk = () => {
-                    modal.classList.add('hidden');
-                    cleanup();
-                    resolve(true);
-                };
-
+                const handleCancel = () => { modal.classList.add('hidden'); cleanup(); resolve(false); };
+                const handleOk = () => { modal.classList.add('hidden'); cleanup(); resolve(true); };
                 const cleanup = () => {
                     cancelBtn.removeEventListener('click', handleCancel);
                     okBtn.removeEventListener('click', handleOk);
                 };
-
                 cancelBtn.addEventListener('click', handleCancel);
                 okBtn.addEventListener('click', handleOk);
             });
@@ -700,35 +686,31 @@
             
             if (!clientSelect || !adminSelect) return;
 
+            const prevClientVal = clientSelect.value || selectedEventIdClient;
+            const prevAdminVal = adminSelect.value || selectedEventIdAdmin;
+
             clientSelect.innerHTML = '';
             adminSelect.innerHTML = '';
 
             if (events && events.length > 0) {
                 events.forEach((evt) => {
                     const opt1 = document.createElement('option');
-                    opt1.value = evt.id;
-                    opt1.textContent = evt.title;
+                    opt1.value = evt.id; opt1.textContent = evt.title;
                     clientSelect.appendChild(opt1);
 
                     const opt2 = document.createElement('option');
-                    opt2.value = evt.id;
-                    opt2.textContent = evt.title;
+                    opt2.value = evt.id; opt2.textContent = evt.title;
                     adminSelect.appendChild(opt2);
                 });
 
                 document.getElementById('event-selector-box')?.classList.remove('hidden');
                 document.getElementById('client-form-container')?.classList.remove('hidden');
                 document.getElementById('client-no-event-box')?.classList.add('hidden');
-                
                 document.getElementById('admin-results-container')?.classList.remove('hidden');
                 document.getElementById('admin-no-event-box')?.classList.add('hidden');
 
-                if (!selectedEventIdClient || !events.some(e => e.id === selectedEventIdClient)) {
-                    selectedEventIdClient = events[0].id;
-                }
-                if (!selectedEventIdAdmin || !events.some(e => e.id === selectedEventIdAdmin)) {
-                    selectedEventIdAdmin = events[0].id;
-                }
+                selectedEventIdClient = events.some(e => e.id === prevClientVal) ? prevClientVal : events[0].id;
+                selectedEventIdAdmin = events.some(e => e.id === prevAdminVal) ? prevAdminVal : events[0].id;
 
                 clientSelect.value = selectedEventIdClient;
                 adminSelect.value = selectedEventIdAdmin;
@@ -739,7 +721,6 @@
                 document.getElementById('event-selector-box')?.classList.add('hidden');
                 document.getElementById('client-form-container')?.classList.add('hidden');
                 document.getElementById('client-no-event-box')?.classList.remove('hidden');
-
                 document.getElementById('admin-results-container')?.classList.add('hidden');
                 document.getElementById('admin-no-event-box')?.classList.remove('hidden');
             }
@@ -759,28 +740,22 @@
             if (mode === 'admin') {
                 clientSec.classList.add('hidden');
                 adminSec.classList.remove('hidden');
-
                 btnAdmin.classList.add('bg-white', 'text-oec-900', 'shadow');
                 btnAdmin.classList.remove('text-oec-100', 'hover:text-white');
                 btnClient.classList.remove('bg-white', 'text-oec-900', 'shadow');
                 btnClient.classList.add('text-oec-100', 'hover:text-white');
-
-                loadFromLocalStorage();
-                refreshAllViews();
                 showToast('管理者モードに切り替えました', 'settings');
             } else {
                 adminSec.classList.add('hidden');
                 clientSec.classList.remove('hidden');
-
                 btnClient.classList.add('bg-white', 'text-oec-900', 'shadow');
                 btnClient.classList.remove('text-oec-100', 'hover:text-white');
                 btnAdmin.classList.remove('bg-white', 'text-oec-900', 'shadow');
                 btnAdmin.classList.add('text-oec-100', 'hover:text-white');
-
-                loadFromLocalStorage();
-                refreshAllViews();
                 showToast('お客様モードに切り替えました', 'user');
             }
+            loadFromLocalStorage();
+            refreshAllViews();
         }
 
         function loadSelectedEventForClient() {
@@ -801,19 +776,12 @@
             if (clientChartContainer) {
                 clientChartContainer.innerHTML = '';
                 currentEvent.slots.forEach(slot => {
-                    const votedBookings = eventBookings.filter(b => {
-                        if (b.selectedSlots && Array.isArray(b.selectedSlots)) {
-                            return b.selectedSlots.includes(slot);
-                        }
-                        return b.selectedSlot === slot;
-                    });
-                    
+                    const votedBookings = eventBookings.filter(b => b.selectedSlots && b.selectedSlots.includes(slot));
                     const count = votedBookings.length;
                     const percentage = totalResponses > 0 ? (count / totalResponses) * 100 : 0;
 
                     const row = document.createElement('div');
                     row.className = "space-y-1";
-
                     row.innerHTML = `
                         <div class="flex items-center justify-between text-[11px] font-semibold text-slate-700">
                             <span>${slot}</span>
@@ -831,16 +799,9 @@
             if (slotsContainer) {
                 slotsContainer.innerHTML = '';
                 currentEvent.slots.forEach((slot) => {
-                    const count = eventBookings.filter(b => {
-                        if (b.selectedSlots && Array.isArray(b.selectedSlots)) {
-                            return b.selectedSlots.includes(slot);
-                        }
-                        return b.selectedSlot === slot;
-                    }).length;
-                    
+                    const count = eventBookings.filter(b => b.selectedSlots && b.selectedSlots.includes(slot)).length;
                     const label = document.createElement('label');
                     label.className = "relative border-2 border-slate-200 hover:border-oec-400 rounded-xl p-4 cursor-pointer transition-all flex items-start space-x-3 bg-white hover:bg-oec-50/20";
-                    
                     label.innerHTML = `
                         <input type="checkbox" name="client-selected-slots" value="${slot}" class="mt-1 h-4 w-4 rounded text-oec-600 focus:ring-oec-500 border-slate-300">
                         <div class="flex-1">
@@ -852,7 +813,6 @@
                             </div>
                         </div>
                     `;
-                    
                     const checkbox = label.querySelector('input');
                     checkbox?.addEventListener('change', function() {
                         if (this.checked) {
@@ -863,7 +823,6 @@
                             label.classList.remove('border-oec-500', 'bg-oec-50/50');
                         }
                     });
-
                     slotsContainer.appendChild(label);
                 });
             }
@@ -873,11 +832,6 @@
         async function submitClientBooking(event) {
             if (event && typeof event.preventDefault === 'function') {
                 event.preventDefault();
-            }
-
-            if (!user || !db) {
-                alert('データベース接続を確立しています。数秒後に再度お試しください。');
-                return;
             }
 
             const selectedCheckboxes = document.querySelectorAll('input[name="client-selected-slots"]:checked');
@@ -908,46 +862,45 @@
                 submittedAt: new Date().toISOString()
             };
 
-            try {
-                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(bookingId).set(newBooking);
-                lastSubmittedBooking = { id: bookingId, ...newBooking };
-                openCompleteModal(lastSubmittedBooking, currentEvent);
-                
-                const noteEl = document.getElementById('client-input-note');
-                if (noteEl) noteEl.value = '';
-            } catch(e) {
-                console.error("Firebase Save Error:", e);
-                showToast("送信に失敗しました。認証許可または構成を確認してください。", "alert-circle");
+            // Firebase接続中か、エラー制限下かに関わらず動作を止めない処理に変更
+            if (firebaseReady && db) {
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(bookingId).set(newBooking);
+                } catch(e) {
+                    console.error("Firebase Save Error:", e);
+                    showToast("クラウド保存失敗。ローカル保存に切り替えます。", "alert-circle");
+                }
             }
+
+            // クラウド成否にかかわらず、画面更新とLocalStorage保存を行ってモーダルを開く
+            bookings.push({ id: bookingId, ...newBooking });
+            saveToLocalStorage();
+            
+            lastSubmittedBooking = { id: bookingId, ...newBooking };
+            openCompleteModal(lastSubmittedBooking, currentEvent);
+            refreshAllViews();
+
+            const noteEl = document.getElementById('client-input-note');
+            if (noteEl) noteEl.value = '';
         }
 
         function addSlotToList() {
             const slotInput = document.getElementById('slot-input');
             if (!slotInput) return;
             const slotVal = slotInput.value;
-            if (!slotVal) {
-                showToast('日時を選択してください', 'alert-circle');
-                return;
-            }
+            if (!slotVal) { showToast('日時を選択してください', 'alert-circle'); return; }
 
             const d = new Date(slotVal);
-            if (isNaN(d.getTime())) {
-                showToast('有効な日時を入力してください', 'alert-circle');
-                return;
-            }
+            if (isNaN(d.getTime())) { showToast('有効な日時を入力してください', 'alert-circle'); return; }
 
             const y = d.getFullYear();
             const m = String(d.getMonth() + 1).padStart(2, '0');
             const day = String(d.getDate()).padStart(2, '0');
             const h = String(d.getHours()).padStart(2, '0');
             const min = String(d.getMinutes()).padStart(2, '0');
-            
             const formatted = `${y}/${m}/${day} ${h}:${min}～`;
 
-            if (tempSlots.includes(formatted)) {
-                showToast('この日時は既に追加されています', 'alert-circle');
-                return;
-            }
+            if (tempSlots.includes(formatted)) { showToast('この日時は既に追加されています', 'alert-circle'); return; }
 
             tempSlots.push(formatted);
             slotInput.value = ''; 
@@ -964,8 +917,7 @@
             const emptyMsg = document.getElementById('temp-slots-empty');
             if (!listContainer || !emptyMsg) return;
 
-            const oldItems = listContainer.querySelectorAll('.temp-slot-item');
-            oldItems.forEach(item => item.remove());
+            listContainer.querySelectorAll('.temp-slot-item').forEach(item => item.remove());
 
             if (tempSlots.length === 0) {
                 emptyMsg.classList.remove('hidden');
@@ -998,25 +950,13 @@
                 event.preventDefault();
             }
 
-            if (!user || !db) {
-                alert('データベースへの接続が正しく初期化されていないか、準備中です。設定を確認して再度お試しください。');
-                return;
-            }
-
             const titleInput = document.getElementById('event-title');
             const descInput = document.getElementById('event-desc');
             const title = titleInput ? titleInput.value.trim() : '';
             const desc = descInput ? descInput.value.trim() : '';
 
-            if (!title) {
-                alert('件名を入力してください。');
-                return;
-            }
-
-            if (!tempSlots || tempSlots.length === 0) {
-                alert('日程調整の候補日時を1つ以上追加してください。');
-                return;
-            }
+            if (!title) { alert('件名を入力してください。'); return; }
+            if (!tempSlots || tempSlots.length === 0) { alert('日程調整の候補日時を1つ以上追加してください。'); return; }
 
             const eventId = 'event-' + Date.now();
             const newEvent = {
@@ -1026,20 +966,25 @@
                 createdAt: new Date().toISOString()
             };
 
-            try {
-                await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(eventId).set(newEvent);
-                
-                if (titleInput) titleInput.value = '';
-                if (descInput) descInput.value = '';
-                
-                tempSlots = [];
-                selectedEventIdAdmin = eventId;
-                selectedEventIdClient = eventId;
-                showToast('新規イベントを公開しました！', 'calendar-plus');
-            } catch(e) {
-                console.error("Failed to publish event:", e);
-                showToast("データベースへの追加に失敗しました。構成値を確認してください。", "alert-circle");
+            if (firebaseReady && db) {
+                try {
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(eventId).set(newEvent);
+                } catch(e) {
+                    console.error("Failed to publish event to Firebase:", e);
+                }
             }
+
+            events.unshift({ id: eventId, ...newEvent });
+            saveToLocalStorage();
+
+            if (titleInput) titleInput.value = '';
+            if (descInput) descInput.value = '';
+            tempSlots = [];
+            selectedEventIdAdmin = eventId;
+            selectedEventIdClient = eventId;
+            
+            showToast('新規イベントを作成しました！', 'calendar-plus');
+            refreshAllViews();
         }
 
         function loadSelectedEventForAdmin() {
@@ -1054,10 +999,8 @@
             const currentEvent = events.find(e => e.id === selectedEventIdAdmin);
             if (!currentEvent) return;
 
-            const selectedTitleEl = document.getElementById('admin-selected-title');
-            const selectedDescEl = document.getElementById('admin-selected-desc');
-            if (selectedTitleEl) selectedTitleEl.textContent = currentEvent.title;
-            if (selectedDescEl) selectedDescEl.textContent = currentEvent.description || '説明はありません。';
+            document.getElementById('admin-selected-title').textContent = currentEvent.title;
+            document.getElementById('admin-selected-desc').textContent = currentEvent.description || '説明はありません。';
 
             const eventBookings = bookings.filter(b => b.eventId === selectedEventIdAdmin);
             const totalResponses = eventBookings.length;
@@ -1066,13 +1009,7 @@
             if (chartContainer) {
                 chartContainer.innerHTML = '';
                 currentEvent.slots.forEach(slot => {
-                    const votedBookings = eventBookings.filter(b => {
-                        if (b.selectedSlots && Array.isArray(b.selectedSlots)) {
-                            return b.selectedSlots.includes(slot);
-                        }
-                        return b.selectedSlot === slot;
-                    });
-                    
+                    const votedBookings = eventBookings.filter(b => b.selectedSlots && b.selectedSlots.includes(slot));
                     const count = votedBookings.length;
                     const percentage = totalResponses > 0 ? (count / totalResponses) * 100 : 0;
 
@@ -1098,27 +1035,19 @@
             if (tbody) {
                 tbody.innerHTML = '';
                 if (eventBookings.length === 0) {
-                    tbody.innerHTML = `
-                        <tr>
-                            <td colspan="4" class="px-3 py-6 text-center text-slate-400 italic">
-                                このイベントに対する回答はまだありません
-                            </td>
-                        </tr>
-                    `;
+                    tbody.innerHTML = `<tr><td colspan="4" class="px-3 py-6 text-center text-slate-400 italic">このイベントに対する回答はまだありません</td></tr>`;
                 } else {
                     eventBookings.forEach(book => {
                         const tr = document.createElement('tr');
                         tr.className = "hover:bg-slate-50/60";
-                        const slotsDisplay = book.selectedSlots && Array.isArray(book.selectedSlots)
-                            ? book.selectedSlots.join('<br>')
-                            : (book.selectedSlot || '未選択');
+                        const slotsDisplay = book.selectedSlots && Array.isArray(book.selectedSlots) ? book.selectedSlots.join('<br>') : '未選択';
 
                         tr.innerHTML = `
                             <td class="px-3 py-2.5 font-semibold text-slate-700">${book.userName}</td>
                             <td class="px-3 py-2.5 text-oec-700 font-bold leading-relaxed">${slotsDisplay}</td>
                             <td class="px-3 py-2.5 text-slate-500 whitespace-pre-line max-w-xs">${book.note || '<span class="text-slate-300 italic">なし</span>'}</td>
                             <td class="px-3 py-2.5 text-right">
-                                <button class="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors single-booking-delete-trigger" data-id="${book.id}" title="削除">
+                                <button class="text-red-400 hover:text-red-600 p-1 rounded hover:bg-red-50 transition-colors single-booking-delete-trigger" data-id="${book.id}">
                                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                                 </button>
                             </td>
@@ -1128,8 +1057,7 @@
 
                     tbody.querySelectorAll('.single-booking-delete-trigger').forEach(btn => {
                         btn.addEventListener('click', function() {
-                            const bid = this.getAttribute('data-id');
-                            deleteBooking(bid);
+                            deleteBooking(this.getAttribute('data-id'));
                         });
                     });
                 }
@@ -1138,133 +1066,101 @@
         }
 
         async function deleteCurrentEvent() {
-            if (!user || !db || !selectedEventIdAdmin) return;
-            
-            const confirmed = await showCustomConfirm(
-                'イベントの削除',
-                'このイベントを削除してよろしいですか？\nデータベースからイベント及び関連するお客様の回答データも永久消去されます。',
-                true
-            );
+            if (!selectedEventIdAdmin) return;
+            const confirmed = await showCustomConfirm('イベントの削除', 'このイベントを削除してよろしいですか？', true);
+            if (!confirmed) return;
 
-            if (confirmed) {
+            if (firebaseReady && db) {
                 try {
                     const relatedBookings = bookings.filter(b => b.eventId === selectedEventIdAdmin);
                     for (const b of relatedBookings) {
                         await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(b.id).delete();
                     }
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(selectedEventIdAdmin).delete();
-                    selectedEventIdAdmin = null;
-                    selectedEventIdClient = null;
-                    showToast('イベントを削除しました', 'trash-2');
-                } catch(e) {
-                    console.error(e);
-                    showToast("削除エラーが発生しました", "alert-circle");
-                }
+                } catch(e) { console.error(e); }
             }
+
+            bookings = bookings.filter(b => b.eventId !== selectedEventIdAdmin);
+            events = events.filter(e => e.id !== selectedEventIdAdmin);
+            saveToLocalStorage();
+            selectedEventIdAdmin = null; selectedEventIdClient = null;
+            showToast('イベントを削除しました', 'trash-2');
+            refreshAllViews();
         }
 
         async function deleteBooking(bookingId) {
-            if (!user || !db || !bookingId) return;
+            if (!bookingId) return;
+            const confirmed = await showCustomConfirm('回答の削除', 'このご担当者様の回答データを削除してよろしいですか？', true);
+            if (!confirmed) return;
 
-            const confirmed = await showCustomConfirm(
-                '回答の削除',
-                'このご担当者様の回答データを削除してよろしいですか？',
-                true
-            );
-
-            if (confirmed) {
+            if (firebaseReady && db) {
                 try {
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(bookingId).delete();
-                    showToast('回答データを削除しました', 'trash-2');
-                } catch(e) {
-                    console.error(e);
-                }
+                } catch(e) { console.error(e); }
             }
+
+            bookings = bookings.filter(b => b.id !== bookingId);
+            saveToLocalStorage();
+            showToast('回答データを削除しました', 'trash-2');
+            refreshAllViews();
         }
 
         async function resetAllData() {
-            if (!user || !db) return;
-            const confirmed = await showCustomConfirm(
-                'データの完全初期化',
-                'データベース全体のデータを完全にリセットします。よろしいですか？',
-                true
-            );
+            const confirmed = await showCustomConfirm('データの完全初期化', '全体のデータを完全にリセットします。よろしいですか？', true);
+            if (!confirmed) return;
 
-            if (confirmed) {
+            if (firebaseReady && db) {
                 try {
-                    for (const b of bookings) {
-                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(b.id).delete();
-                    }
-                    for (const e of events) {
-                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(e.id).delete();
-                    }
-                    selectedEventIdClient = null;
-                    selectedEventIdAdmin = null;
-                    showToast('すべてのデータを初期化しました', 'trash-2');
-                } catch(e) {
-                    console.error(e);
-                }
+                    for (const b of bookings) await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(b.id).delete();
+                    for (const e of events) await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(e.id).delete();
+                } catch(e) { console.error(e); }
             }
+
+            bookings = []; events = [];
+            saveToLocalStorage();
+            selectedEventIdClient = null; selectedEventIdAdmin = null;
+            showToast('すべてのデータを初期化しました', 'trash-2');
+            refreshAllViews();
         }
 
         async function loadSampleData() {
-            if (!user || !db) return;
-            const confirmed = await showCustomConfirm(
-                'サンプルデータのロード',
-                '現在のデータをすべてクリアし、動作テスト用のサンプルデータを登録してよろしいですか？',
-                false
-            );
+            const confirmed = await showCustomConfirm('サンプルデータのロード', '現在のデータをクリアし、動作テスト用のサンプルデータを登録しますか？', false);
+            if (!confirmed) return;
 
-            if (confirmed) {
+            const today = new Date();
+            const formatDate = (daysAhead, hour) => {
+                const target = new Date(today);
+                target.setDate(today.getDate() + daysAhead);
+                return `${target.getFullYear()}/${String(target.getMonth() + 1).padStart(2, '0')}/${String(target.getDate()).padStart(2, '0')} ${hour}:00～`;
+            };
+
+            const demoEvent1 = {
+                title: '【アイアットOEC】新システム導入に向けたお打合せ',
+                description: '日頃よりお世話になっております。「財務会計システム」の仕様確認及び、導入スケジュールの調整を行わせていただきたく存じます。',
+                slots: [formatDate(2, '10'), formatDate(2, '14'), formatDate(3, '11')],
+                createdAt: new Date().toISOString()
+            };
+
+            const demoBook1 = {
+                eventId: 'demo-event-1',
+                orgName: '-', deptName: "", userName: 'A様', email: "",
+                selectedSlots: [formatDate(2, '10'), formatDate(2, '14')],
+                note: '接続テストも兼ねて早めに入室予定です。',
+                submittedAt: new Date().toISOString()
+            };
+
+            if (firebaseReady && db) {
                 try {
-                    for (const b of bookings) {
-                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(b.id).delete();
-                    }
-                    for (const e of events) {
-                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(e.id).delete();
-                    }
-
-                    const today = new Date();
-                    const formatDate = (daysAhead, hour) => {
-                        const target = new Date(today);
-                        target.setDate(today.getDate() + daysAhead);
-                        return `${target.getFullYear()}/${String(target.getMonth() + 1).padStart(2, '0')}/${String(target.getDate()).padStart(2, '0')} ${hour}:00～`;
-                    };
-
-                    const demoEvent1 = {
-                        title: '【アイアットOEC】新システム導入に向けたお打合せ',
-                        description: '日頃よりお世話になっております。先日ご案内させていただきました「財務会計システム」の仕様確認及び、導入スケジュールの調整を行わせていただきたく存じます。',
-                        slots: [formatDate(2, '10'), formatDate(2, '14'), formatDate(3, '11')],
-                        createdAt: new Date().toISOString()
-                    };
-
-                    const demoEvent2 = {
-                        title: '【アイアットOEC】OA機器入替に伴う現地調査の日程調整',
-                        description: '平素より格別のご高配を賜り厚く御礼申し上げます。複合機およびPC端末の入替作業に先立ち、現地調査を行わせていただきます。',
-                        slots: [formatDate(5, '10'), formatDate(5, '13')],
-                        createdAt: new Date().toISOString()
-                    };
-
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc('demo-event-1').set(demoEvent1);
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc('demo-event-2').set(demoEvent2);
-
-                    const demoBook1 = {
-                        eventId: 'demo-event-1',
-                        orgName: '-',
-                        deptName: "",
-                        userName: 'A様',
-                        email: "",
-                        selectedSlots: [formatDate(2, '10'), formatDate(2, '14')],
-                        note: '接続テストも兼ねて早めに入室予定です。',
-                        submittedAt: new Date().toISOString()
-                    };
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc('demo-book-1').set(demoBook1);
-
-                    showToast('サンプルデータを登録しました', 'sparkles');
-                } catch(e) {
-                    console.error(e);
-                }
+                } catch(e) { console.error(e); }
             }
+
+            events = [{ id: 'demo-event-1', ...demoEvent1 }];
+            bookings = [{ id: 'demo-book-1', ...demoBook1 }];
+            saveToLocalStorage();
+            showToast('サンプルデータを登録しました', 'sparkles');
+            refreshAllViews();
         }
 
         function openCompleteModal(booking, event) {
@@ -1272,9 +1168,7 @@
             if (!modal) return;
             
             modal.classList.remove('hidden');
-
-            const summaryNameEl = document.getElementById('summary-name');
-            if (summaryNameEl) summaryNameEl.textContent = booking.userName;
+            document.getElementById('summary-name').textContent = booking.userName;
             
             const summarySlotsContainer = document.getElementById('summary-slots');
             if (summarySlotsContainer) {
@@ -1296,19 +1190,12 @@
             if (modalChartContainer) {
                 modalChartContainer.innerHTML = '';
                 event.slots.forEach(slot => {
-                    const votedBookings = eventBookings.filter(b => {
-                        if (b.selectedSlots && Array.isArray(b.selectedSlots)) {
-                            return b.selectedSlots.includes(slot);
-                        }
-                        return b.selectedSlot === slot;
-                    });
-                    
+                    const votedBookings = eventBookings.filter(b => b.selectedSlots && b.selectedSlots.includes(slot));
                     const count = votedBookings.length;
                     const percentage = totalResponses > 0 ? (count / totalResponses) * 100 : 0;
 
                     const row = document.createElement('div');
                     row.className = "space-y-1";
-
                     row.innerHTML = `
                         <div class="flex items-center justify-between text-[11px] font-semibold text-slate-700">
                             <span>${slot}</span>
@@ -1326,34 +1213,23 @@
             if (tbody) {
                 tbody.innerHTML = '';
                 if (eventBookings.length === 0) {
-                    tbody.innerHTML = `
-                        <tr>
-                            <td colspan="3" class="px-3 py-6 text-center text-slate-400 italic">回答はまだありません</td>
-                        </tr>
-                    `;
+                    tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-slate-400 italic">回答はまだありません</td></tr>`;
                 } else {
                     eventBookings.forEach(book => {
                         const tr = document.createElement('tr');
                         tr.className = "hover:bg-slate-50/60";
-                        const slotsDisplay = book.selectedSlots && Array.isArray(book.selectedSlots)
-                            ? book.selectedSlots.join('<br>')
-                            : (book.selectedSlot || '未選択');
-
+                        const slotsDisplay = book.selectedSlots && Array.isArray(book.selectedSlots) ? book.selectedSlots.join('<br>') : '未選択';
                         tr.innerHTML = `
                             <td class="px-3 py-2 text-slate-600 font-semibold">${book.userName}</td>
                             <td class="px-3 py-2 text-oec-700 font-bold leading-relaxed">${slotsDisplay}</td>
-                            <td class="px-3 py-2 text-slate-500 whitespace-pre-line max-w-xs">
-                                ${book.note || '<span class="text-slate-300 italic">なし</span>'}
-                            </td>
+                            <td class="px-3 py-2 text-slate-500 whitespace-pre-line max-w-xs">${book.note || '<span class="text-slate-300 italic">なし</span>'}</td>
                         `;
                         tbody.appendChild(tr);
                     });
                 }
             }
 
-            const slotsText = booking.selectedSlots && Array.isArray(booking.selectedSlots)
-                ? booking.selectedSlots.map(s => `・${s}`).join('\n')
-                : `· ${booking.selectedSlot || '未設定'}`;
+            const slotsText = booking.selectedSlots && Array.isArray(booking.selectedSlots) ? booking.selectedSlots.map(s => `・${s}`).join('\n') : '';
             const textForCopy = `【打合せ日程回答】\n件名: ${event.title}\n割り当て名: ${booking.userName}\n希望日時:\n${slotsText}\n備考: ${booking.note || 'なし'}`;
             
             const copyArea = document.getElementById('copy-text-area');
@@ -1366,54 +1242,28 @@
             document.getElementById('complete-modal')?.classList.add('hidden');
         }
 
-        function copyResponseText() {
-            const textarea = document.getElementById('copy-text-area');
-            if (!textarea) return;
-            textarea.select();
-            document.execCommand('copy');
-            showToast('クリップボードに回答をコピーしました', 'clipboard');
-        }
-
         function copyTableToClipboard() {
             const currentEvent = events.find(e => e.id === selectedEventIdAdmin);
             if (!currentEvent) return;
 
             const eventBookings = bookings.filter(b => b.eventId === selectedEventIdAdmin);
-            if (eventBookings.length === 0) {
-                showToast('コピーする回答がありません', 'alert-circle');
-                return;
-            }
+            if (eventBookings.length === 0) { showToast('コピーする回答がありません', 'alert-circle'); return; }
 
             let text = `【集計結果】${currentEvent.title}\n\n`;
             eventBookings.forEach((b, idx) => {
-                const slotsText = b.selectedSlots && Array.isArray(b.selectedSlots)
-                    ? b.selectedSlots.join('、')
-                    : (b.selectedSlot || 'なし');
-
-                text += `${idx + 1}. ${b.userName}\n`;
-                text += `   希望日時: ${slotsText}\n`;
-                if (b.note) text += `   備考: ${b.note}\n`;
-                text += `\n`;
+                const slotsText = b.selectedSlots && Array.isArray(b.selectedSlots) ? b.selectedSlots.join('、') : 'なし';
+                text += `${idx + 1}. ${b.userName}\n   希望日時: ${slotsText}\n${b.note ? `   備考: ${b.note}\n` : ''}\n`;
             });
 
-            const temp = document.createElement('textarea');
-            temp.value = text;
-            document.body.appendChild(temp);
-            temp.select();
-            document.execCommand('copy');
-            document.body.removeChild(temp);
-
-            showToast('集計結果をクリップボードにコピーしました！', 'clipboard');
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('集計結果をコピーしました！', 'clipboard');
+            });
         }
 
         function openDataModal() {
             document.getElementById('data-modal')?.classList.remove('hidden');
-            const allData = {
-                events: events,
-                bookings: bookings
-            };
             const exportArea = document.getElementById('export-data-area');
-            if (exportArea) exportArea.value = JSON.stringify(allData, null, 2);
+            if (exportArea) exportArea.value = JSON.stringify({ events, bookings }, null, 2);
         }
 
         function closeDataModal() {
@@ -1423,17 +1273,14 @@
         function copyExportData() {
             const area = document.getElementById('export-data-area');
             if (!area) return;
-            area.select();
-            document.execCommand('copy');
-            showToast('データをコピーしました。他PCで復元できます', 'clipboard');
+            navigator.clipboard.writeText(area.value).then(() => {
+                showToast('データをコピーしました。他PCで復元できます', 'clipboard');
+            });
         }
 
         function importData() {
             const rawText = document.getElementById('import-data-area')?.value.trim();
-            if (!rawText) {
-                alert('貼り付けエリアが空です。');
-                return;
-            }
+            if (!rawText) { alert('貼り付けエリアが空です。'); return; }
 
             try {
                 const parsed = JSON.parse(rawText);
@@ -1441,26 +1288,17 @@
                     events = parsed.events;
                     bookings = parsed.bookings || [];
                     saveToLocalStorage();
-                    
                     selectedEventIdAdmin = events.length > 0 ? events[0].id : null;
                     selectedEventIdClient = events.length > 0 ? events[0].id : null;
-
                     refreshAllViews();
                     closeDataModal();
-                    const importArea = document.getElementById('import-data-area');
-                    if (importArea) importArea.value = '';
                     showToast('データを正常にインポートしました！', 'download-cloud');
                 } else {
-                    alert('データの形式が正しくありません。（events配列が含まれていません）');
+                    alert('データの形式が正しくありません。');
                 }
             } catch (e) {
-                alert('JSONの解析に失敗しました。コピーしたテキスト全体が正しく貼り付けられているか確認してください。');
+                alert('JSONの解析に失敗しました。');
             }
-        }
-
-        function saveToLocalStorage() {
-            localStorage.setItem('oec_scheduler_events', JSON.stringify(events || []));
-            localStorage.setItem('oec_scheduler_bookings', JSON.stringify(bookings || []));
         }
 
         function showToast(message, iconName = 'info') {
@@ -1482,7 +1320,6 @@
                 toast.classList.add('translate-y-20', 'opacity-0');
             }, 3000);
         }
-
     </script>
 </body>
 </html>
