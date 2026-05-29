@@ -513,6 +513,10 @@
         let selectedEventIdClient = null;
         let selectedEventIdAdmin = null;
         let lastSubmittedBooking = null;
+        
+        // 二重送信防止フラグ
+        let isSubmittingEvent = false;
+        let isSubmittingBooking = false;
 
         document.addEventListener('DOMContentLoaded', async () => {
             setupEventListeners();
@@ -831,14 +835,25 @@
                 event.preventDefault();
             }
 
+            // 送信処理中はブロック
+            if (isSubmittingBooking) return;
+
             const selectedCheckboxes = document.querySelectorAll('input[name="client-selected-slots"]:checked');
             if (selectedCheckboxes.length === 0) {
                 alert('ご都合の良い日程を1つ以上選んでください。');
                 return;
             }
 
+            // 処理開始
+            isSubmittingBooking = true;
+            const btn = document.getElementById('btn-submit-booking');
+            if (btn) {
+                btn.disabled = true;
+                btn.classList.add('opacity-50', 'cursor-not-allowed');
+            }
+
             const currentEvent = events.find(e => e.id === selectedEventIdClient);
-            if (!currentEvent) return;
+            if (!currentEvent) { isSubmittingBooking = false; return; }
 
             const eventBookings = bookings.filter(b => b.eventId === selectedEventIdClient);
             const nextIndex = eventBookings.length;
@@ -861,11 +876,9 @@
 
             lastSubmittedBooking = { id: bookingId, ...newBooking };
 
-            // Firebase同期の重複を防ぐ修正箇所
             if (firebaseReady && db) {
                 try {
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(bookingId).set(newBooking);
-                    // Firebase接続時は onSnapshot が検知して自動更新するため、ここでは配列に push しない
                 } catch(e) {
                     console.error("Firebase Save Error:", e);
                     showToast("クラウド保存失敗。ローカル保存に切り替えます。", "alert-circle");
@@ -873,17 +886,22 @@
                     saveToLocalStorage();
                 }
             } else {
-                // オフライン（ローカルモード）時のみローカル配列に追加
                 bookings.push({ id: bookingId, ...newBooking });
                 saveToLocalStorage();
             }
 
-            // モーダル表示と画面更新
             openCompleteModal(lastSubmittedBooking, currentEvent);
             refreshAllViews();
 
             const noteEl = document.getElementById('client-input-note');
             if (noteEl) noteEl.value = '';
+
+            // 処理完了後に解除
+            isSubmittingBooking = false;
+            if (btn) {
+                btn.disabled = false;
+                btn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
         }
 
         function addSlotToList() {
@@ -952,6 +970,9 @@
                 event.preventDefault();
             }
 
+            // すでに送信処理中の場合は何もしない
+            if (isSubmittingEvent) return;
+
             const titleInput = document.getElementById('event-title');
             const descInput = document.getElementById('event-desc');
             const title = titleInput ? titleInput.value.trim() : '';
@@ -959,6 +980,14 @@
 
             if (!title) { alert('件名を入力してください。'); return; }
             if (!tempSlots || tempSlots.length === 0) { alert('日程調整の候補日時を1つ以上追加してください。'); return; }
+
+            // 処理開始時にフラグを立て、ボタンを無効化
+            isSubmittingEvent = true;
+            const submitBtn = document.getElementById('btn-submit-event');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            }
 
             const eventId = 'event-' + Date.now();
             const newEvent = {
@@ -968,18 +997,15 @@
                 createdAt: new Date().toISOString()
             };
 
-            // Firebase同期の重複を防ぐ修正箇所
             if (firebaseReady && db) {
                 try {
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(eventId).set(newEvent);
-                    // Firebase接続時は onSnapshot が自動更新を行うため、ここでは配列に unshift しない
                 } catch(e) {
                     console.error("Failed to publish event to Firebase:", e);
                     events.unshift({ id: eventId, ...newEvent });
                     saveToLocalStorage();
                 }
             } else {
-                // オフライン（ローカルモード）時のみローカル配列に追加
                 events.unshift({ id: eventId, ...newEvent });
                 saveToLocalStorage();
             }
@@ -992,6 +1018,13 @@
             
             showToast('新規イベントを作成しました！', 'calendar-plus');
             refreshAllViews();
+
+            // 処理完了後にフラグとボタン無効化を解除
+            isSubmittingEvent = false;
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
         }
 
         function loadSelectedEventForAdmin() {
