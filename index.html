@@ -843,6 +843,7 @@
             const currentEvent = events.find(e => e.id === selectedEventIdClient);
             if (!currentEvent) return;
 
+            // 【改善点②】手動での bookings.push() を廃止し、カウントが重複するのを防止
             const eventBookings = bookings.filter(b => b.eventId === selectedEventIdClient);
             const nextIndex = eventBookings.length;
             const generatedName = getAlphabetName(nextIndex);
@@ -862,23 +863,23 @@
                 submittedAt: new Date().toISOString()
             };
 
-            // Firebase接続中か、エラー制限下かに関わらず動作を止めない処理に変更
             if (firebaseReady && db) {
                 try {
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(bookingId).set(newBooking);
+                    lastSubmittedBooking = { id: bookingId, ...newBooking };
+                    openCompleteModal(lastSubmittedBooking, currentEvent);
                 } catch(e) {
                     console.error("Firebase Save Error:", e);
-                    showToast("クラウド保存失敗。ローカル保存に切り替えます。", "alert-circle");
+                    showToast("保存に失敗しました。", "alert-circle");
                 }
+            } else {
+                // オフライン（ローカル稼働時）の時だけ配列に直接追加する
+                bookings.push({ id: bookingId, ...newBooking });
+                saveToLocalStorage();
+                lastSubmittedBooking = { id: bookingId, ...newBooking };
+                openCompleteModal(lastSubmittedBooking, currentEvent);
+                refreshAllViews();
             }
-
-            // クラウド成否にかかわらず、画面更新とLocalStorage保存を行ってモーダルを開く
-            bookings.push({ id: bookingId, ...newBooking });
-            saveToLocalStorage();
-            
-            lastSubmittedBooking = { id: bookingId, ...newBooking };
-            openCompleteModal(lastSubmittedBooking, currentEvent);
-            refreshAllViews();
 
             const noteEl = document.getElementById('client-input-note');
             if (noteEl) noteEl.value = '';
@@ -968,23 +969,28 @@
 
             if (firebaseReady && db) {
                 try {
+                    // 【改善点①】手動での events.unshift() を廃止
+                    // クラウドにセットすれば、onSnapshot経由で自動かつ重複なく画面に反映されます
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(eventId).set(newEvent);
+                    selectedEventIdAdmin = eventId;
+                    selectedEventIdClient = eventId;
+                    showToast('新規イベントを作成しました！', 'calendar-plus');
                 } catch(e) {
                     console.error("Failed to publish event to Firebase:", e);
                 }
+            } else {
+                // オフライン時のみ手動で追加
+                events.unshift({ id: eventId, ...newEvent });
+                saveToLocalStorage();
+                selectedEventIdAdmin = eventId;
+                selectedEventIdClient = eventId;
+                showToast('新規イベントを作成しました（ローカル保存）', 'calendar-plus');
+                refreshAllViews();
             }
-
-            events.unshift({ id: eventId, ...newEvent });
-            saveToLocalStorage();
 
             if (titleInput) titleInput.value = '';
             if (descInput) descInput.value = '';
             tempSlots = [];
-            selectedEventIdAdmin = eventId;
-            selectedEventIdClient = eventId;
-            
-            showToast('新規イベントを作成しました！', 'calendar-plus');
-            refreshAllViews();
         }
 
         function loadSelectedEventForAdmin() {
@@ -1078,14 +1084,14 @@
                     }
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(selectedEventIdAdmin).delete();
                 } catch(e) { console.error(e); }
+            } else {
+                bookings = bookings.filter(b => b.eventId !== selectedEventIdAdmin);
+                events = events.filter(e => e.id !== selectedEventIdAdmin);
+                saveToLocalStorage();
+                selectedEventIdAdmin = null; selectedEventIdClient = null;
+                showToast('イベントを削除しました', 'trash-2');
+                refreshAllViews();
             }
-
-            bookings = bookings.filter(b => b.eventId !== selectedEventIdAdmin);
-            events = events.filter(e => e.id !== selectedEventIdAdmin);
-            saveToLocalStorage();
-            selectedEventIdAdmin = null; selectedEventIdClient = null;
-            showToast('イベントを削除しました', 'trash-2');
-            refreshAllViews();
         }
 
         async function deleteBooking(bookingId) {
@@ -1097,12 +1103,12 @@
                 try {
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(bookingId).delete();
                 } catch(e) { console.error(e); }
+            } else {
+                bookings = bookings.filter(b => b.id !== bookingId);
+                saveToLocalStorage();
+                showToast('回答データを削除しました', 'trash-2');
+                refreshAllViews();
             }
-
-            bookings = bookings.filter(b => b.id !== bookingId);
-            saveToLocalStorage();
-            showToast('回答データを削除しました', 'trash-2');
-            refreshAllViews();
         }
 
         async function resetAllData() {
@@ -1114,13 +1120,13 @@
                     for (const b of bookings) await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(b.id).delete();
                     for (const e of events) await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(e.id).delete();
                 } catch(e) { console.error(e); }
+            } else {
+                bookings = []; events = [];
+                saveToLocalStorage();
+                selectedEventIdClient = null; selectedEventIdAdmin = null;
+                showToast('すべてのデータを初期化しました', 'trash-2');
+                refreshAllViews();
             }
-
-            bookings = []; events = [];
-            saveToLocalStorage();
-            selectedEventIdClient = null; selectedEventIdAdmin = null;
-            showToast('すべてのデータを初期化しました', 'trash-2');
-            refreshAllViews();
         }
 
         async function loadSampleData() {
@@ -1154,13 +1160,13 @@
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc('demo-event-1').set(demoEvent1);
                     await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc('demo-book-1').set(demoBook1);
                 } catch(e) { console.error(e); }
+            } else {
+                events = [{ id: 'demo-event-1', ...demoEvent1 }];
+                bookings = [{ id: 'demo-book-1', ...demoBook1 }];
+                saveToLocalStorage();
+                showToast('サンプルデータを登録しました', 'sparkles');
+                refreshAllViews();
             }
-
-            events = [{ id: 'demo-event-1', ...demoEvent1 }];
-            bookings = [{ id: 'demo-book-1', ...demoBook1 }];
-            saveToLocalStorage();
-            showToast('サンプルデータを登録しました', 'sparkles');
-            refreshAllViews();
         }
 
         function openCompleteModal(booking, event) {
