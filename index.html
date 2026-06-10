@@ -1054,24 +1054,30 @@
         }
 
         async function deleteCurrentEvent() {
-            if (!selectedEventIdAdmin) return;
+            // ★ 非同期通信中に変数が書き換わらないよう、対象IDを退避させます。
+            const targetEventId = selectedEventIdAdmin; 
+            if (!targetEventId) return;
+
             const confirmed = await showCustomConfirm('イベントの削除', 'このイベントを削除してよろしいですか？', true);
             if (!confirmed) return;
 
             if (firebaseReady && db) {
                 try {
-                    const relatedBookings = bookings.filter(b => b.eventId === selectedEventIdAdmin);
+                    const relatedBookings = bookings.filter(b => b.eventId === targetEventId);
                     for (const b of relatedBookings) {
                         await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(b.id).delete();
                     }
-                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(selectedEventIdAdmin).delete();
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(targetEventId).delete();
                 } catch(e) { console.error(e); }
             }
 
-            bookings = bookings.filter(b => b.eventId !== selectedEventIdAdmin);
-            events = events.filter(e => e.id !== selectedEventIdAdmin);
+            bookings = bookings.filter(b => b.eventId !== targetEventId);
+            events = events.filter(e => e.id !== targetEventId);
             saveToLocalStorage();
-            selectedEventIdAdmin = null; selectedEventIdClient = null;
+            
+            if (selectedEventIdAdmin === targetEventId) selectedEventIdAdmin = null;
+            if (selectedEventIdClient === targetEventId) selectedEventIdClient = null;
+            
             showToast('イベントを削除しました', 'trash-2');
             refreshAllViews();
         }
@@ -1099,8 +1105,15 @@
 
             if (firebaseReady && db) {
                 try {
-                    for (const b of bookings) await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(b.id).delete();
-                    for (const e of events) await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(e.id).delete();
+                    // 非同期中に配列が減少しないようにスナップショット(コピー)を作成してループします
+                    const bookingsToDelete = [...bookings];
+                    const eventsToDelete = [...events];
+                    for (const b of bookingsToDelete) {
+                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('bookings').doc(b.id).delete();
+                    }
+                    for (const e of eventsToDelete) {
+                        await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('events').doc(e.id).delete();
+                    }
                 } catch(e) { console.error(e); }
             }
 
